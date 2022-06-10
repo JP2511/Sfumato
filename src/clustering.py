@@ -39,6 +39,9 @@ def barcode_distance(center_pos: np.ndarray, center_genes: np.ndarray,
 
     Returns:
         float: measure of distance between the center and the barcode.
+
+    Requires:
+        m (float): m should be in [1, 40]
     """
 
     sq_d_c = eucledian_distance(center_genes, barcode_genes)
@@ -162,12 +165,19 @@ class BCMap:
         
         Requires:
             sorted_values: must be sorted in increasing order.
+            start: start must be smaller or equal to stop.
+            stop: stop has to be higher or equal to stop.
         """
         
         initial_index = self.binary_search(sorted_values, index, start)
         ranged_barcodes = set()
+
+        if initial_index is None:
+            return ranged_barcodes
         
-        while sorted_values[initial_index] <= stop:
+        while (initial_index < len(sorted_values) and 
+                sorted_values[initial_index][index] <= stop):
+            
             ranged_barcodes.add(sorted_values[initial_index])
             initial_index += 1
         
@@ -187,13 +197,13 @@ class BCMap:
         """
 
         x_c, y_c = center
-        bc_range = self.find_bc_range(self.x_sorted, x_c - 2*self.S, 
-                                        x_c + 2*self.S)
-        bc_range &= self.find_bc_range(self.y_sorted, y_c - 2*self.S, 
-                                        y_c + 2*self.S)
+        bc_range = self.find_bc_range(self.x_sorted, x_c - 2/self.S, 
+                                        x_c + 2/self.S)
+        bc_range &= self.find_bc_range(self.y_sorted, y_c - 2/self.S, 
+                                        y_c + 2/self.S)
         
         return bc_range
 
 
-
 ###############################################################################
+
