@@ -41,7 +41,7 @@ def barcode_distance(center_pos: np.ndarray, center_genes: np.ndarray,
         float: measure of distance between the center and the barcode.
 
     Requires:
-        m (float): m should be in [1, 40]
+        m: m should be in [1, 40]
     """
 
     sq_d_c = eucledian_distance(center_genes, barcode_genes)
@@ -206,4 +206,106 @@ class BCMap:
 
 
 ###############################################################################
+# SLIC algorithm
 
+
+# --------------------------------------- #
+#    initialization of the clusters       #
+# --------------------------------------- #
+
+
+
+# --------------------------------------- #
+#  clustering section of the algorithm    #
+# --------------------------------------- #
+
+def find_new_clusters(cm: np.ndarray, bc_map: BCMap, c_k: list, labels: list, 
+                        distances: list, m: float) -> list:
+    """Adjusts the cluster centers using the SLIC algorithm.
+
+    Args:
+        cm (np.ndarray): gene expression matrix (barcodes x genes).
+        bc_map (BCMap): map of the coordinates of the barcodes.
+        c_k (list): current cluster centers.
+        labels (list): index of the cluster center associated with each barcode.
+        distances (list): distance of each barcode to the nearest barcode.
+        m (float): weight that evaluates the importance of the gene count simi-
+            larity in comparison with the spatial closeness.
+
+    Returns:
+        new_centers (list[np.ndarray]): new centers.
+    """
+    
+    new_centers = []
+    for c_i, center in enumerate(c_k):
+        
+        new_centers.append([np.zeros(cm.shape[1]+2)])
+        n = 0
+        
+        for x, y, i in bc_map.find_bc_in_region(center):
+            coor = np.array([x, y])
+            cm_counts = cm[i,:]
+            d = barcode_distance(center[:2], center[2:], coor, cm_counts,
+                                        bc_map.S, m)
+            if d < distances[i]:
+                distances[i] = d
+                labels[i] = c_i
+
+                new_centers[c_i] += np.append(coor, cm_counts)
+                n += 1
+        
+        new_centers[c_i] /= n
+    
+    return new_centers
+
+
+# --------------------------------------- #
+#        residual error calculation       #
+# --------------------------------------- #
+
+
+# --------------------------------------- #
+#              SLIC algorithm             #
+# --------------------------------------- #
+
+
+def slic(barcodes: pd.DataFrame, cm: np.ndarray, k: int, threshold: float, 
+            m: float):
+    """Implementation of the SLIC algorithm applied to single-cell RNA-seq data.
+
+    Args:
+        barcodes (pd.DataFrame): dataframe containing the barcodes and the 
+            associated coordinates.
+        cm (np.ndarray): gene expression of each barcode.
+        k (int): number of superpixels or clusters to consider.
+        threshold (float): threshold value used to determined if the algorithm
+            has reached convergence.
+        m (float): weight that evaluates the importance of the gene count simi-
+            larity in comparison with the spatial closeness.
+
+    Returns:
+        labels (list[int]): the element of index i of the list corresponds to 
+            the index of the cluster that is associated with the barcode at 
+            index i in the barcodes. 
+    
+    Requires:
+        cm: the index of a row in the matrix should correspond to the gene 
+            expression of the barcode at index i in the barcodes.
+        m: should be in [1, 40]
+    """
+    
+    bc_map = BCMap(barcodes, k)
+    cluster_centers # initialize cluster centers
+
+    labels = [-1 for _ in np.arange(cm.shape[1])]
+    distances = [float('inf') for _ in np.arange(cm.shape[1])]
+
+    residual_error = threshold + 1
+
+    while residual_error <= threshold:
+        new_clusters = find_new_clusters(cm, bc_map, cluster_centers, labels, 
+                                        distances, m)
+        residual_error # calculate residual error
+        cluster_centers = new_clusters
+        
+    return labels
