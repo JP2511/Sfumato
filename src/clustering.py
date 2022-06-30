@@ -4,6 +4,13 @@ import pandas as pd
 
 
 ###############################################################################
+# accelarating the mean
+
+@nb.njit
+def avg(values: np.ndarray) -> float:
+    return np.mean(values)
+
+###############################################################################
 # distance functions
 
 @nb.njit
@@ -260,11 +267,6 @@ def find_new_clusters(cm: np.ndarray, bc_map: BCMap, c_k: list, labels: list,
 
 
 # --------------------------------------- #
-#        residual error calculation       #
-# --------------------------------------- #
-
-
-# --------------------------------------- #
 #              SLIC algorithm             #
 # --------------------------------------- #
 
@@ -297,15 +299,19 @@ def slic(barcodes: pd.DataFrame, cm: np.ndarray, k: int, threshold: float,
     bc_map = BCMap(barcodes, k)
     cluster_centers # initialize cluster centers
 
-    labels = [-1 for _ in np.arange(cm.shape[1])]
-    distances = [float('inf') for _ in np.arange(cm.shape[1])]
+    labels = np.full(cm.shape[1], -1) 
+    distances = np.full(cm.shape[1], float('inf'))
 
-    residual_error = threshold + 1
+    residual_error = float('inf')
+    avg_dist = float('inf')
 
     while residual_error <= threshold:
         new_clusters = find_new_clusters(cm, bc_map, cluster_centers, labels, 
                                         distances, m)
-        residual_error # calculate residual error
+        new_avg_dist = avg(distances)
+        residual_error = np.abs(avg_dist - new_avg_dist)
+        avg_dist = new_avg_dist
+
         cluster_centers = new_clusters
         
     return labels
