@@ -2,6 +2,8 @@ import unittest
 import numpy as np
 
 import sys
+
+# from src.preprocessing import addition, construct_data, count_measured, obtain_gene_names, readr_generator
 sys.path.append('../src')
 
 from preprocessing import *
@@ -246,8 +248,37 @@ if __name__ == '__main__':
     
     filename = "../../data/Puck_190926_06_combined.csv"
 
-    table = loader(filename)
-    print(table.head())
+    # cm, bc_met, gene_met = load_and_preprocess(filename, 
+    #                             bc_min={'counted_genes': 10, 'variance': 0.001},
+    #                             gene_top={'variance': 10})
+    # print(f"Size of the matrix {cm.shape}")
+    # print()
+    # print(bc_met.head(6))
+    # print()
+    # print(gene_met.head(6))
+    # print()
+
+    load = readr_generator(filename)
+    headers, load_data = obtain_gene_names(load)
+
+    metrics = {'counted_genes': count_measured, 'total_counts': addition, 
+                'variance': variance, 'mad': mad, 
+                'dispersion': dispersion_ratio}
+
+    min_max_values = {'counted_genes': (None, None), 
+                        'total_counts': (None, None), 
+                        'variance': (None, None), 
+                        'mad': (None, None), 
+                        'dispersion': (None, None)}
+
+    a, b, c = construct_data(load_data, metrics, min_max_values, metrics)
+    
+    print(a[:5])
+    print()
+    print(b[:5,:5])
+    print()
+    print(c.head())
+    print()
 
 
     ################################

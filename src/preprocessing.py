@@ -1,16 +1,17 @@
+import csv
+
 import numpy as np
 import numba as nb
 import pandas as pd
-import dask.dataframe as dd
 
 from math import ceil
 from typing import Generator, Iterable
 from random import choice
 from sklearn import preprocessing
 from functools import reduce, partial
-from collections import deque
 from scipy.stats import spearmanr
 from sklearn.decomposition import PCA
+from concurrent.futures import ProcessPoolExecutor
 
 
 ###############################################################################
@@ -64,29 +65,66 @@ def check_multiple_metrics(available_metrics: dict, chosen_metrics: set):
 ###############################################################################
 # loading data
 
-def loader(filename: str, delimiter: str=",", 
-            skip_fst_col: bool=True) -> dd.DataFrame:
-    """Loads the data.
+# ---------------------------- #
+# readers and type converters  #
+# ---------------------------- #
+
+def readr_generator(filename: str, delimiter: str=",") -> Generator:
+    """Reads a file line by line, while converting each row into a list, by 
+    separating each of the values by the delimiter.
 
     Args:
-        filename (str): name and path of the file.
-        delimiter (str, optional): field separator. Defaults to ",".
-        skip_fst_col (bool, optional): flag to indicate if the first column 
-            should be removed. Defaults to True.
+        filename (str): name and path of the file that contains the data.
+        delimiter (str, optional): delimiter of the fields of the datafile. 
+            Defaults to ",".
 
-    Returns:
-        data (dd.DataFrame): dataframe of the gene expression of the barcodes.
-    
-    Requires:
-        filename: should be a valid path/name of the file.
+    Yields:
+        Generator: object that allows for the iteration of the lines of the 
+            datafile. Each line is represented as a list of the fields separated
+            by the delimiter.
     """
 
-    data = dd.read_csv(filename, delimiter=delimiter)
+    with open(filename, 'r', encoding='utf8') as datafile:
+        data_reader = csv.reader(datafile, delimiter=delimiter)
+        for line in data_reader:
+            yield line
+
+
+def obtain_gene_names(readr: Generator, skip_fst_col: bool=True) -> tuple:
+    """Obtains the gene names.
+
+    Args:
+        readr (Generator): generator of the rows of the data.
+
+    Returns:
+        headers (list[str]): names of the genes.
+        readr (Generator): generator of the rows of the data without the first
+            row.
+    """
+
+    headers = next(readr)[skip_fst_col+3:]
+    return headers, readr
+
+
+def sep_tag_counts(row: list, skip_fst_col: bool=True) -> tuple:
+    """Given a row of data, it separates the tags from the counts.
+
+    Args:
+        row (list): Row of data with the following format: barcode, 
+            x coordinate, y coordinate, gene 1, gene ..., gene n.
+        skip_fst_col (bool, optional): flag indicate whether to consider the 
+            first column or not. Defaults to True.
+
+    Returns:
+        tags (dict): tags of the row (barcode, x coordinate, y coordinate).
+        (np.ndarray): counts of the genes and the index.
+    """
     
-    if skip_fst_col:
-        return data.drop("Unnamed: 0", axis=1)
+    tags = [row[skip_fst_col], # barcode
+            float(row[skip_fst_col + 1]), # x coordinate
+            float(row[skip_fst_col + 2])] # y coordinate
     
-    return data
+    return (tags, np.array(row[skip_fst_col+3:], dtype=int))
 
 
 ###############################################################################
@@ -104,6 +142,12 @@ def addition(vector: np.ndarray) -> int:
     """
 
     return np.sum(vector)
+
+
+@nb.njit
+def count_measured(vector: np.ndarray) -> int:
+    
+    return addition(vector > 0)
 
 
 @nb.njit
@@ -158,120 +202,51 @@ def mad(vector: np.ndarray) -> float:
 #  calculating barcode metrics    #
 # ------------------------------- #
 
-def row_n_genes(tags: dict, gene_counts: np.ndarray):
-    """Calculates the number of different genes that were counted at least once,
-    in a given barcode.
+def calc_bc_mets(row: list, metrics: dict, min_max_values: dict, rel_met: set,
+            skip_fst_col: bool=True) -> tuple:
 
-    Args:
-        tags (dict): tags of the row (barcode, x coordinate, y coordinate).
-        gene_counts (np.ndarray): counts of each gene for the current barcode.
-    """
-
-    tags['counted_genes'] = addition(gene_counts > 0)
-
-
-def row_gene_counts(tags: dict, gene_counts: np.ndarray):
-    """Calculates the total number of genes that were counted in a given 
-    barcode.
-
-    Args:
-        tags (dict): tags of the row (barcode, x coordinate, y coordinate).
-        gene_counts (np.ndarray): counts of each gene for the current barcode.
-    """
-
-    tags['total_counts'] = addition(gene_counts)
-
-
-def row_gene_var(tags: dict, gene_counts: np.ndarray):
-    """Calculates the variance of the gene count in a given barcode.
-
-    Args:
-        tags (dict): tags of the row (barcode, x coordinate, y coordinate).
-        gene_counts (np.ndarray): counts of the genes for a given barcode.
-    """
-
-    tags['variance'] = variance(gene_counts)
-
-
-def row_gene_mad(tags: dict, gene_counts: np.ndarray):
-    """Calculates the mean absolute difference of the gene count in a given 
-    barcode.
-
-    Args:
-        tags (dict): tags of the row (barcode, x coordinate, y coordinate).
-        gene_counts (np.ndarray): counts of the genes for a given barcode.
-    """
-
-    tags['mad'] = mad(gene_counts)
-
-
-def row_gene_dispersion(tags: dict, gene_counts: np.ndarray):
-    """Calculates the ratio of the arithmetic mean to geometric mean of the gene
-    count.
-
-    Args:
-        tags (dict): tags of the row (barcode, x coordinate, y coordinate).
-        gene_counts (np.ndarray): counts of the genes for a given barcode.
-    """
-
-    tags['dispersion'] = dispersion_ratio(gene_counts)
-
-
-def calc_row_metrics(tags: dict, gene_counts: np.ndarray, metrics: set, 
-                        metric_funcs: dict) -> dict:
-    """Calculates the given metrics for a barcode.
-
-    Args:
-        tags (dict): barcode, x coordinate and y coordinate of each row of the
-            original data.
-        gene_counts (np.ndarray): gene counts associated with the barcode of the
-            tags.
-        metrics (set): metrics that are wanted to be calculated using the gene
-            counts of a given barcode.
-        metric_funcs (dict): metric names associated with the function that 
-            performs the calculation of the metric.
-
-    Returns:
-        tags (dict): barcode, x coordinate, y coordinate and metrics related to
-            the barcode.
-    """
-    
+    tags, gene_expr = sep_tag_counts(row, skip_fst_col)
+    calculated_met = {}
     for metric in metrics:
-        metric_funcs[metric](tags, gene_counts)
-    
-    return tags
-
-
-# -------------------------------------- #
-# filtering barcodes on absolute values  #
-# -------------------------------------- #
-
-def filter_abs_barcodes(tags: dict, min: dict, max: dict) -> bool:
-    """Filters barcodes based on absolute values of the defined metrics.
-
-    Args:
-        tags (dict): barcode, x coordinate, y coordinate and assossiated 
-            metrics.
-        min (dict): metrics (key) for which a minimum value (value) is required 
-            for the barcode to be included in the downstream analysis.
-        max (dict): metrics (key) for which a maximum value (value) is required 
-            for the barcode to be included in the downstream analysis.
-    
-    Returns:
-        bool: flag indicating if the barcode should be included in the 
-            downstream analysis (True) or not (False).
-    """
-    
-    for metric in min:
-        if tags[metric] < min[metric]:
-            return False
+        calculated_value = metrics[metric](gene_expr)
+        minV, maxV = min_max_values[metric]
         
-    for metric in max:
-        if tags[metric] > max[metric]:
-            return False
+        if minV is not None and calculated_value < minV:
+            return None
+        elif maxV is not None and calculated_value > maxV:
+            return None
+        elif metric in rel_met:
+            calculated_met[metric] = calculated_value
     
-    return True
+    return (tags, gene_expr, calculated_met)
 
+
+def construct_data(data: Generator, metrics: dict, min_max_values: dict, 
+                    rel_met: set, skip_fst_col: bool=True) -> tuple:
+    
+    bcs = []
+    cm = []
+    bc_mets = []
+    
+    with ProcessPoolExecutor() as executer:
+        for row in data:
+            results = executer.submit(calc_bc_mets, row=row, metrics=metrics,
+                                        min_max_values=min_max_values, 
+                                        rel_met=rel_met, 
+                                        skip_fst_col=skip_fst_col).result()
+            
+            bcs.append(results[0])
+            cm.append(results[1])
+            bc_mets.append(results[2])
+    
+    return bcs, np.array(cm), pd.DataFrame(bc_mets)
+
+
+
+
+################################################################################
+################################################################################
+################################################################################
 
 # -------------------------------------- #
 # filtering barcodes on relative values  #
