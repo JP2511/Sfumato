@@ -246,15 +246,8 @@ if __name__ == '__main__':
     
     filename = "../../data/Puck_190926_06_combined.csv"
 
-    cm, bc_met, gene_met = load_and_preprocess(filename, 
-                                bc_min={'counted_genes': 10, 'variance': 0.001},
-                                gene_top={'variance': 10})
-    print(f"Size of the matrix {cm.shape}")
-    print()
-    print(bc_met.head(6))
-    print()
-    print(gene_met.head(6))
-    print()
+    table = loader(filename)
+    print(table.head())
 
 
     ################################
